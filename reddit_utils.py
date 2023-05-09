@@ -1,10 +1,20 @@
+"""This module provides utility functions for querying submissions and comments from Reddit."""
+
+import json
 import time
+from datetime import datetime
 from json import JSONDecodeError
+from pathlib import Path
 from typing import Optional, Generator, Dict, Any
 
+from praw import Reddit
+from praw.models import Submission, Comment
+from praw.models.comment_forest import CommentForest
 from requests import HTTPError
 from requests.adapters import HTTPAdapter, Retry
 from requests_toolbelt.sessions import BaseUrlSession
+
+PRAW_CREDENTIALS_FILE = Path(__file__).parent / 'credentials' / 'praw_credentials.json'
 
 
 class PushshiftError(Exception):
@@ -166,3 +176,115 @@ class Pushshift(BaseUrlSession):
         """Handle the ratelimit before a request by waiting if necessary."""
         time.sleep(max(0.0, self._wait_between_secs - (time.perf_counter() - self._last_request_time)))
         self._last_request_time = time.perf_counter()
+
+
+def submission_to_dict(submission: Submission, datetime_fmt='%Y-%m-%d %H:%M:%S') -> Dict[str, Any]:
+    """Parse a reddit submission object and write the relevant attributes into a dictionary.
+
+    Args:
+        submission: A praw.reddit.Submission instance.
+        datetime_fmt: The format to use when parsing the submission's creation date.
+
+    Returns:
+        A dictionary containing the parsed submission.
+    """
+    submission_parsed = {
+        'author_name': submission.author and submission.author.name,
+        'author_flair_text': submission.author_flair_text,
+        'comments': None,
+        'created_utc': datetime.fromtimestamp(submission.created_utc).strftime(datetime_fmt),
+        'distinguished': submission.distinguished,
+        'edited': submission.edited,
+        'id': submission.id,
+        'is_original_content': submission.is_original_content,
+        'link_flair_text': submission.link_flair_text,
+        'locked': submission.locked,
+        'name': submission.name,
+        'num_comments': submission.num_comments,  # Includes deleted, removed, and spam comments.
+        'over_18': submission.over_18,
+        'permalink': submission.permalink,
+        'removed_by_category': submission.removed_by_category,
+        'score': submission.score,
+        'selftext': submission.selftext,
+        'spoiler': submission.spoiler,
+        'stickied': submission.stickied,
+        'subreddit_display_name': submission.subreddit.display_name,
+        'title': submission.title,
+        'upvote_ratio': submission.upvote_ratio,
+        'url': submission.url,
+    }
+    return submission_parsed
+
+
+def init_reddit() -> Reddit:
+    """Initialize the Reddit API wrapper. Reads the PRAW credentials from a JSON file which must be located at
+    `credentials/praw_credentials.json` relative to this file."""
+    praw_credentials = json.loads(PRAW_CREDENTIALS_FILE.read_text())
+    reddit = Reddit(**praw_credentials)
+    reddit.read_only = True
+    return reddit
+
+
+def fetch_comments_for_submission(submission: Submission, limit: Optional[int] = None) -> CommentForest:
+    """Fetch the comments for a submission.
+
+    Args:
+        submission: A praw.reddit.Submission instance.
+        limit: The maximum number of comments to fetch. If None, all comments will be fetched.
+
+    Returns:
+        A praw.models.comment_forest.CommentForest instance.
+    """
+    comments = submission.comments
+    comments.replace_more(limit=limit)
+    return comments
+
+
+def comment_to_dict(comment: Comment, datetime_fmt='%Y-%m-%d %H:%M:%S') -> Dict[str, Any]:
+    """Parse a reddit comment object and write the relevant attributes into a dictionary.
+
+    Args:
+        comment: A praw.reddit.Comment instance.
+        datetime_fmt: The format to use when parsing the comment's creation date.
+
+    Returns:
+        A dictionary containing the parsed comment.
+    """
+    comment_parsed = {
+        # The author is None if the Reddit account does not exist anymore.
+        'author_name': comment.author and comment.author.name,
+        'body': comment.body,
+        'created_utc': datetime.fromtimestamp(comment.created_utc).strftime(datetime_fmt),
+        'distinguished': comment.distinguished,
+        'edited': comment.edited,
+        'id': comment.id,
+        'is_submitter': comment.is_submitter,
+        'link_id': comment.link_id,
+        'parent_id': comment.parent_id,
+        'permalink': comment.permalink,
+        'replies': [comment_to_dict(comment) for comment in comment.replies],
+        'score': comment.score,
+        'stickied': comment.stickied,
+    }
+    return comment_parsed
+
+
+def is_submission_created_in_last_n_hours(
+        submission: Submission | Dict[str, Any],
+        hours: int,
+        datetime_fmt='%Y-%m-%d %H:%M:%S'
+) -> bool:
+    """Check if the submission was created in the last `hours` hours.
+
+    Args:
+        submission: A `praw.reddit.Submission` instance or a dictionary containing the parsed submission.
+        hours: The number of hours.
+        datetime_fmt: The format to use when parsing the submission's creation date.
+
+    Returns:
+        True if the submission was created in the last `hours` hours, False otherwise.
+    """
+    submission_created = submission['created_utc'] if isinstance(submission, dict) else submission.created_utc
+    submission_created = datetime.strptime(submission_created, datetime_fmt)
+    now = datetime.now()
+    return (now - submission_created).total_seconds() < hours * 3600

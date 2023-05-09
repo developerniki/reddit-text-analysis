@@ -9,7 +9,8 @@ from typing import Optional
 
 from tqdm import tqdm
 
-from pushshift_api import Pushshift
+import reddit_utils
+from reddit_utils import Pushshift
 
 ARCHIVES_DIR = Path(__file__).parent / 'archives'
 ARCHIVES_DIR.mkdir(exist_ok=True)
@@ -95,7 +96,8 @@ def main() -> None:
         print(f'Starting from scratch ({max_submissions} submissions)...')
 
     # Retrieve the submissions and comments.
-    pushshift = Pushshift()
+    pushshift = Pushshift()  # Use PushShift API to discover submissions (official API has limit of 1,000 most recent).
+    reddit = reddit_utils.init_reddit()  # Use official Reddit API to fetch submissions and comments.
 
     # total_submission_count = pushshift.query_submission_count(subreddit)
     # if max_submissions is not None:
@@ -107,7 +109,10 @@ def main() -> None:
 
     with tqdm(initial=len(posts), total=total_submission_count, desc='submissions') as pbar:
         for submission in pushshift.query_submissions(subreddit, count=max_submissions - len(posts), before=before):
-            submission['comments'] = list(pushshift.query_comments(submission['id']))
+            submission = reddit.submission(submission['id'])
+            comments = reddit_utils.fetch_comments_for_submission(submission)
+            submission = reddit_utils.submission_to_dict(submission)
+            submission['comments'] = [reddit_utils.comment_to_dict(comment) for comment in comments]
             submission = dict(sorted(submission.items()))
             posts.append(submission)
             t_end_ms = round(time.time_ns() / 1_000_000)
