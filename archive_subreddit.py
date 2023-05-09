@@ -86,6 +86,7 @@ def main() -> None:
         t_end_ms = int(match.group('t_end'))
         posts = json.loads(archive_file.read_text())
         before = posts[-1]['created_utc']
+        before = int(datetime.strptime(before, '%Y-%m-%d %H:%M:%S').timestamp())
         print(f'Continuing from "{archive_file.name}"...')
     else:
         max_submissions = prompt_optional_int_until_valid('Enter the maximum number of submissions to retrieve: ')
